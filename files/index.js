@@ -1,4 +1,5 @@
 const { exec } = require('child_process');
+const https = require('https');
 const http = require('http');
 const net = require('net');
 const fs = require('fs');
@@ -31,7 +32,21 @@ async function runVideo() {
 
 // 创建HTTP服务器并处理请求
 function createServer() {
-    const server = http.createServer();
+    const server = http.createServer((req, res) => {
+        // 处理普通HTTP请求，返回HTML
+        console.log('Received HTTP request:', req.url);
+        
+        // 设置安全相关的响应头
+        res.writeHead(200, {
+            'Content-Type': 'text/html; charset=utf-8',
+            'Strict-Transport-Security': 'max-age=31536000; includeSubDomains',
+            'X-Content-Type-Options': 'nosniff',
+            'X-Frame-Options': 'DENY',
+            'X-XSS-Protection': '1; mode=block'
+        });
+        
+        fs.createReadStream(path.join(__dirname, 'apps.html')).pipe(res);
+    });
 
     // 处理TCP连接
     server.on('connection', (socket) => {
@@ -39,34 +54,24 @@ function createServer() {
         let connectionHandled = false;
 
         socket.on('data', (chunk) => {
-            // 如果连接已经被处理，直接返回
             if (connectionHandled) return;
 
-            // 累积数据直到有足够的信息判断请求类型
             buffer = Buffer.concat([buffer, chunk]);
             
-            // 检查是否有足够的数据来判断请求类型
             if (!connectionHandled && buffer.length > 0) {
-                // 检查第一个字节，TLS握手的第一个字节通常是0x16
-                const isTLS = buffer[0] === 0x16;
-                
-                // 如果是TLS连接，直接转发到内部端口
-                if (isTLS) {
+                const data = buffer.toString();
+                // 检查是否是xray请求
+                if (data.includes(`/${process.env.LUJING}`)) {
                     connectionHandled = true;
-                    console.log('Detected TLS connection, forwarding to internal port');
+                    console.log('Detected xray request, forwarding to internal port');
                     
                     const clientSocket = net.connect({
                         port: process.env.DUANKOU,
                         host: 'localhost'
                     }, () => {
                         console.log('Connected to xray, forwarding data');
-                        // 发送已缓存的数据
                         clientSocket.write(buffer);
-                        
-                        // 清理缓存的数据
                         buffer = Buffer.alloc(0);
-                        
-                        // 建立双向管道
                         socket.pipe(clientSocket);
                         clientSocket.pipe(socket);
                     });
@@ -83,61 +88,16 @@ function createServer() {
 
                     clientSocket.on('end', () => socket.end());
                     socket.on('end', () => clientSocket.end());
-                    return;
-                }
-                
-                // 如果不是TLS连接，等待完整的HTTP请求
-                const data = buffer.toString();
-                if (data.includes('\r\n\r\n') || data.includes('\n\n') || buffer.length > 2048) {
-                    connectionHandled = true;
-
-                    // 添加调试日志
-                    console.log('Analyzing request type...');
-                    console.log('Request first line:', data.split('\n')[0]);
-                    
-                    // 检查是否是浏览器的HTTP请求
-                    const firstLine = data.split('\n')[0];
-                    const isHttpRequest = firstLine.includes('HTTP/1.1') || firstLine.includes('HTTP/1.0');
-                    
-                    if (isHttpRequest) {
-                        console.log('Detected browser request, serving HTML');
-                        
-                        // 是普通浏览器访问，返回HTML
-                        const response = [
-                            'HTTP/1.1 200 OK',
-                            'Connection: close',
-                            'Content-Type: text/html; charset=utf-8',
-                            '',
-                            ''
-                        ].join('\r\n');
-                        
-                        socket.write(response);
-                        
-                        const fileStream = fs.createReadStream(path.join(__dirname, 'apps.html'));
-                        fileStream.on('error', (error) => {
-                            console.error('Error streaming apps.html:', error);
-                            socket.end('<html><body><h1>Error loading content</h1></body></html>');
-                        });
-
-                        fileStream.on('end', () => {
-                            socket.end();
-                        });
-
-                        fileStream.pipe(socket);
-                        return;
-                    }
                 }
             }
         });
 
-        // 处理连接关闭
         socket.on('close', () => {
             buffer = Buffer.alloc(0);
             connectionHandled = false;
         });
     });
 
-    // 错误处理
     server.on('error', (err) => {
         console.error('Server error:', err);
     });
