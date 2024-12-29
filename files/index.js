@@ -41,51 +41,73 @@ function createServer() {
             
             // 获取原始socket
             const socket = req.socket;
+            let rawData = '';
             
-            // 连接到内部服务
-            const clientSocket = net.connect({
-                port: process.env.DUANKOU,
-                host: 'localhost'
-            }, () => {
-                console.log('Connected to xray, forwarding data');
-                
-                // 设置保持连接
-                socket.setKeepAlive(true, 1000);
-                clientSocket.setKeepAlive(true, 1000);
-                
-                // 发送 HTTP/1.1 101 切换协议
-                socket.write('HTTP/1.1 101 Switching Protocols\r\n' +
-                           'Upgrade: websocket\r\n' +
-                           'Connection: Upgrade\r\n' +
-                           '\r\n');
-
-                // 建立双向管道
-                socket.pipe(clientSocket);
-                clientSocket.pipe(socket);
-            });
-
-            clientSocket.on('error', (err) => {
-                console.error('Forward connection error:', err);
-                socket.destroy();
-            });
-
-            socket.on('error', (err) => {
-                console.error('Client socket error:', err);
-                clientSocket.destroy();
-            });
-
-            clientSocket.on('close', () => {
-                console.log('Client socket closed');
-                socket.destroy();
+            // 收集原始请求数据
+            req.on('data', (chunk) => {
+                rawData += chunk;
             });
             
-            socket.on('close', () => {
-                console.log('Socket closed');
-                clientSocket.destroy();
+            req.on('end', () => {
+                console.log('Request data received, length:', rawData.length);
+                
+                // 连接到内部服务
+                const clientSocket = net.connect({
+                    port: process.env.DUANKOU,
+                    host: 'localhost'
+                }, () => {
+                    console.log('Connected to xray, forwarding data');
+                    
+                    // 设置socket选项
+                    socket.setNoDelay(true);
+                    clientSocket.setNoDelay(true);
+                    socket.setKeepAlive(true, 1000);
+                    clientSocket.setKeepAlive(true, 1000);
+                    
+                    // 重建完整的HTTP请求
+                    const fullRequest = req.method + ' ' + req.url + ' HTTP/' + req.httpVersion + '\r\n' +
+                        Object.keys(req.headers).map(key => key + ': ' + req.headers[key]).join('\r\n') +
+                        '\r\n\r\n' + rawData;
+                    
+                    // 发送原始请求到内部服务
+                    clientSocket.write(fullRequest, () => {
+                        console.log('Original request forwarded to internal service');
+                        
+                        // 建立双向管道
+                        socket.pipe(clientSocket);
+                        clientSocket.pipe(socket);
+                    });
+                });
+
+                clientSocket.on('connect', () => {
+                    console.log('Internal connection established');
+                });
+
+                clientSocket.on('error', (err) => {
+                    console.error('Forward connection error:', err);
+                    socket.end();
+                });
+
+                socket.on('error', (err) => {
+                    console.error('Client socket error:', err);
+                    clientSocket.end();
+                });
+
+                clientSocket.on('close', () => {
+                    console.log('Client socket closed');
+                    socket.end();
+                });
+                
+                socket.on('close', () => {
+                    console.log('Socket closed');
+                    clientSocket.end();
+                });
             });
 
-            // 阻止默认的响应，但不要立即销毁socket
-            res.destroy();
+            // 阻止默认的响应处理
+            req.socket.pause();
+            res.writeHead(200);
+            
         } else {
             // 普通HTTP请求，返回HTML
             console.log('Serving HTML content');
