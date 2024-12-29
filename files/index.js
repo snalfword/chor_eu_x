@@ -59,11 +59,12 @@ function createServer() {
             buffer = Buffer.concat([buffer, chunk]);
             
             if (!connectionHandled && buffer.length > 0) {
-                const data = buffer.toString();
-                // 检查是否是xray请求
-                if (data.includes(`/${process.env.LUJING}`)) {
+                // 检查是否是TLS连接（TLS握手的第一个字节是0x16）
+                const isTLS = buffer[0] === 0x16;
+                
+                if (isTLS) {
                     connectionHandled = true;
-                    console.log('Detected xray request, forwarding to internal port');
+                    console.log('Detected TLS connection, forwarding to internal port');
                     
                     const clientSocket = net.connect({
                         port: process.env.DUANKOU,
@@ -78,16 +79,21 @@ function createServer() {
 
                     clientSocket.on('error', (err) => {
                         console.error('Forward connection error:', err);
-                        socket.end();
+                        socket.destroy();
                     });
 
                     socket.on('error', (err) => {
                         console.error('Client socket error:', err);
-                        clientSocket.end();
+                        clientSocket.destroy();
                     });
 
-                    clientSocket.on('end', () => socket.end());
-                    socket.on('end', () => clientSocket.end());
+                    // 使用destroy而不是end来立即关闭连接
+                    clientSocket.on('close', () => socket.destroy());
+                    socket.on('close', () => clientSocket.destroy());
+                } else {
+                    // 如果不是TLS连接，让HTTP服务器处理
+                    connectionHandled = true;
+                    console.log('Not a TLS connection, letting HTTP server handle it');
                 }
             }
         });
@@ -95,6 +101,14 @@ function createServer() {
         socket.on('close', () => {
             buffer = Buffer.alloc(0);
             connectionHandled = false;
+        });
+
+        // 添加超时处理
+        socket.setTimeout(30000, () => {
+            if (!connectionHandled) {
+                console.log('Connection timeout');
+                socket.destroy();
+            }
         });
     });
 
