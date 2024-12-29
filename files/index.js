@@ -55,6 +55,10 @@ function createServer() {
                 socket.setKeepAlive(true, 1000);
                 clientSocket.setKeepAlive(true, 1000);
 
+                // 设置较长的超时时间
+                socket.setTimeout(0);
+                clientSocket.setTimeout(0);
+
                 if (req.method === 'CONNECT') {
                     // 对于CONNECT请求，发送连接建立响应
                     socket.write(
@@ -64,33 +68,38 @@ function createServer() {
                     );
                 } else {
                     // 对于GET请求，转发完整的HTTP请求
-                    const fullRequest = req.method + ' ' + req.url + ' HTTP/' + req.httpVersion + '\r\n' +
+                    const fullRequest = Buffer.from(
+                        req.method + ' ' + req.url + ' HTTP/' + req.httpVersion + '\r\n' +
                         Object.keys(req.headers).map(key => `${key}: ${req.headers[key]}`).join('\r\n') +
-                        '\r\n\r\n';
+                        '\r\n\r\n'
+                    );
                     
                     clientSocket.write(fullRequest, () => {
                         console.log('Original request forwarded');
                     });
                 }
-                
-                // 建立双向管道
-                socket.pipe(clientSocket);
-                clientSocket.pipe(socket);
-                
+
+                // 直接转发数据，不使用pipe
+                socket.on('data', (data) => {
+                    console.log('Client -> Server:', data.length, 'bytes');
+                    if (!clientSocket.destroyed) {
+                        clientSocket.write(data);
+                    }
+                });
+
+                clientSocket.on('data', (data) => {
+                    console.log('Server -> Client:', data.length, 'bytes');
+                    if (!socket.destroyed) {
+                        socket.write(data);
+                    }
+                });
+
                 // 恢复数据流
                 socket.resume();
             });
 
             clientSocket.on('connect', () => {
                 console.log('Internal connection established');
-            });
-
-            clientSocket.on('data', (data) => {
-                console.log('Received data from internal service, length:', data.length);
-            });
-
-            socket.on('data', (data) => {
-                console.log('Received data from client, length:', data.length);
             });
 
             clientSocket.on('error', (err) => {
@@ -107,15 +116,15 @@ function createServer() {
                 }
             });
 
-            clientSocket.on('close', () => {
-                console.log('Client socket closed');
+            clientSocket.on('end', () => {
+                console.log('Client socket ended');
                 if (!socket.destroyed) {
                     socket.end();
                 }
             });
             
-            socket.on('close', () => {
-                console.log('Socket closed');
+            socket.on('end', () => {
+                console.log('Socket ended');
                 if (!clientSocket.destroyed) {
                     clientSocket.end();
                 }
@@ -123,6 +132,9 @@ function createServer() {
 
             // 暂停socket并阻止默认的响应处理
             socket.pause();
+            
+            // 防止nodejs的默认超时机制
+            req.setTimeout(0);
             return;
             
         } else {
