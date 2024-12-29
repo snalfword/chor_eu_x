@@ -53,6 +53,12 @@ function createServer() {
                 socket.setKeepAlive(true, 1000);
                 clientSocket.setKeepAlive(true, 1000);
                 
+                // 发送 HTTP/1.1 101 切换协议
+                socket.write('HTTP/1.1 101 Switching Protocols\r\n' +
+                           'Upgrade: websocket\r\n' +
+                           'Connection: Upgrade\r\n' +
+                           '\r\n');
+
                 // 建立双向管道
                 socket.pipe(clientSocket);
                 clientSocket.pipe(socket);
@@ -78,8 +84,8 @@ function createServer() {
                 clientSocket.destroy();
             });
 
-            // 防止默认的响应处理
-            req.socket.destroy();
+            // 阻止默认的响应，但不要立即销毁socket
+            res.destroy();
         } else {
             // 普通HTTP请求，返回HTML
             console.log('Serving HTML content');
