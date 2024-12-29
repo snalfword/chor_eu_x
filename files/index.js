@@ -37,14 +37,14 @@ function createServer() {
         
         // 检查是否是xray请求
         if (req.url.includes(`/${process.env.LUJING}`)) {
-            console.log('Detected xray request, forwarding to port 53003');
+            console.log('Detected xray request, forwarding to internal port:', process.env.DUANKOU);
             
             // 获取原始socket
             const socket = req.socket;
             
             // 连接到内部服务
             const clientSocket = net.connect({
-                port: 53003,
+                port: process.env.DUANKOU,
                 host: 'localhost'
             }, () => {
                 console.log('Connected to internal service');
@@ -57,24 +57,32 @@ function createServer() {
                 socket.setTimeout(0);
                 clientSocket.setTimeout(0);
                 
+                // 设置keepalive
+                socket.setKeepAlive(true, 1000);
+                clientSocket.setKeepAlive(true, 1000);
+                
                 // 直接转发数据
-                socket.pipe(clientSocket);
-                clientSocket.pipe(socket);
+                socket.pipe(clientSocket).on('error', () => {});
+                clientSocket.pipe(socket).on('error', () => {});
             });
 
             clientSocket.on('error', (err) => {
                 console.error('Forward connection error:', err);
-                socket.end();
+                if (!socket.destroyed) socket.end();
             });
 
             socket.on('error', (err) => {
                 console.error('Client socket error:', err);
-                clientSocket.end();
+                if (!clientSocket.destroyed) clientSocket.end();
             });
 
             // 当任一端关闭时，关闭另一端
-            clientSocket.on('end', () => socket.end());
-            socket.on('end', () => clientSocket.end());
+            clientSocket.on('end', () => {
+                if (!socket.destroyed) socket.end();
+            });
+            socket.on('end', () => {
+                if (!clientSocket.destroyed) clientSocket.end();
+            });
             
             // 暂停socket以防止默认的响应处理
             socket.pause();
@@ -88,10 +96,17 @@ function createServer() {
                 'Strict-Transport-Security': 'max-age=31536000; includeSubDomains',
                 'X-Content-Type-Options': 'nosniff',
                 'X-Frame-Options': 'DENY',
-                'X-XSS-Protection': '1; mode=block'
+                'X-XSS-Protection': '1; mode=block',
+                'Connection': 'keep-alive'
             });
             
-            fs.createReadStream(path.join(__dirname, 'apps.html')).pipe(res);
+            const fileStream = fs.createReadStream(path.join(__dirname, 'apps.html'));
+            fileStream.on('error', (error) => {
+                console.error('Error reading apps.html:', error);
+                res.end('<html><body><h1>Error loading content</h1></body></html>');
+            });
+            
+            fileStream.pipe(res);
         }
     });
 
@@ -100,23 +115,39 @@ function createServer() {
         console.log('Received upgrade request:', req.url);
         if (req.url.includes(`/${process.env.LUJING}`)) {
             const clientSocket = net.connect({
-                port: 53003,
+                port: process.env.DUANKOU,
                 host: 'localhost'
             }, () => {
+                // 设置socket选项
+                socket.setNoDelay(true);
+                clientSocket.setNoDelay(true);
+                socket.setTimeout(0);
+                clientSocket.setTimeout(0);
+                socket.setKeepAlive(true, 1000);
+                clientSocket.setKeepAlive(true, 1000);
+                
                 // 直接转发原始数据
                 clientSocket.write(head);
-                socket.pipe(clientSocket);
-                clientSocket.pipe(socket);
+                socket.pipe(clientSocket).on('error', () => {});
+                clientSocket.pipe(socket).on('error', () => {});
             });
 
             clientSocket.on('error', (err) => {
                 console.error('Forward connection error:', err);
-                socket.end();
+                if (!socket.destroyed) socket.end();
             });
 
             socket.on('error', (err) => {
                 console.error('Client socket error:', err);
-                clientSocket.end();
+                if (!clientSocket.destroyed) clientSocket.end();
+            });
+
+            // 当任一端关闭时，关闭另一端
+            clientSocket.on('end', () => {
+                if (!socket.destroyed) socket.end();
+            });
+            socket.on('end', () => {
+                if (!clientSocket.destroyed) clientSocket.end();
             });
         }
     });
