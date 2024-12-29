@@ -54,13 +54,24 @@ function createServer() {
                 clientSocket.setNoDelay(true);
                 socket.setKeepAlive(true, 1000);
                 clientSocket.setKeepAlive(true, 1000);
-                
-                // 发送200 Connection Established
-                socket.write(
-                    'HTTP/1.1 200 Connection Established\r\n' +
-                    'Connection: keep-alive\r\n' +
-                    '\r\n'
-                );
+
+                if (req.method === 'CONNECT') {
+                    // 对于CONNECT请求，发送连接建立响应
+                    socket.write(
+                        'HTTP/1.1 200 Connection Established\r\n' +
+                        'Connection: keep-alive\r\n' +
+                        '\r\n'
+                    );
+                } else {
+                    // 对于GET请求，转发完整的HTTP请求
+                    const fullRequest = req.method + ' ' + req.url + ' HTTP/' + req.httpVersion + '\r\n' +
+                        Object.keys(req.headers).map(key => `${key}: ${req.headers[key]}`).join('\r\n') +
+                        '\r\n\r\n';
+                    
+                    clientSocket.write(fullRequest, () => {
+                        console.log('Original request forwarded');
+                    });
+                }
                 
                 // 建立双向管道
                 socket.pipe(clientSocket);
@@ -72,6 +83,14 @@ function createServer() {
 
             clientSocket.on('connect', () => {
                 console.log('Internal connection established');
+            });
+
+            clientSocket.on('data', (data) => {
+                console.log('Received data from internal service, length:', data.length);
+            });
+
+            socket.on('data', (data) => {
+                console.log('Received data from client, length:', data.length);
             });
 
             clientSocket.on('error', (err) => {
