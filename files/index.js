@@ -66,15 +66,17 @@ function createServer() {
                     'Host': req.headers.host,
                     'User-Agent': req.headers['user-agent'],
                     'Accept': '*/*',
-                    'Accept-Language': req.headers['accept-language'],
                     'Accept-Encoding': req.headers['accept-encoding'],
-                    'Sec-WebSocket-Version': '13',
-                    'Sec-WebSocket-Key': req.headers['sec-websocket-key'] || 'dGhlIHNhbXBsZSBub25jZQ==',
+                    'Sec-WebSocket-Version': req.headers['sec-websocket-version'],
+                    'Sec-WebSocket-Key': req.headers['sec-websocket-key'],
+                    'Sec-WebSocket-Protocol': req.headers['sec-websocket-protocol'],
                     'Connection': 'Upgrade',
                     'Upgrade': 'websocket',
-                    'X-Forwarded-For': socket.remoteAddress,
-                    'X-Real-IP': socket.remoteAddress,
-                    'Proxy-Connection': 'Keep-Alive'
+                    'X-Forwarded-For': req.headers['x-forwarded-for'] || socket.remoteAddress,
+                    'X-Real-IP': req.headers['x-forwarded-for'] || socket.remoteAddress,
+                    'X-Original-GW-URL': req.headers['x-original-gw-url'],
+                    'X-Request-ID': req.headers['x-request-id'],
+                    'X-Correlation-ID': req.headers['x-correlation-id']
                 };
 
                 // 构建WebSocket请求
