@@ -59,38 +59,34 @@ function createServer() {
                 socket.setTimeout(0);
                 clientSocket.setTimeout(0);
 
-                if (req.method === 'CONNECT') {
-                    // 对于CONNECT请求，发送连接建立响应
-                    socket.write(
-                        'HTTP/1.1 200 Connection Established\r\n' +
-                        'Connection: keep-alive\r\n' +
-                        '\r\n'
-                    );
-                } else {
-                    // 对于GET请求，转发完整的HTTP请求
-                    const fullRequest = Buffer.from(
-                        req.method + ' ' + req.url + ' HTTP/' + req.httpVersion + '\r\n' +
-                        Object.keys(req.headers).map(key => `${key}: ${req.headers[key]}`).join('\r\n') +
-                        '\r\n\r\n'
-                    );
-                    
-                    clientSocket.write(fullRequest, () => {
-                        console.log('Original request forwarded');
-                    });
-                }
+                // 发送CONNECT响应
+                socket.write(
+                    'HTTP/1.1 200 Connection Established\r\n' +
+                    'Connection: keep-alive\r\n' +
+                    'Proxy-Connection: keep-alive\r\n' +
+                    '\r\n'
+                );
 
                 // 直接转发数据，不使用pipe
                 socket.on('data', (data) => {
                     console.log('Client -> Server:', data.length, 'bytes');
-                    if (!clientSocket.destroyed) {
-                        clientSocket.write(data);
+                    try {
+                        if (!clientSocket.destroyed) {
+                            clientSocket.write(data);
+                        }
+                    } catch (err) {
+                        console.error('Error writing to client socket:', err);
                     }
                 });
 
                 clientSocket.on('data', (data) => {
                     console.log('Server -> Client:', data.length, 'bytes');
-                    if (!socket.destroyed) {
-                        socket.write(data);
+                    try {
+                        if (!socket.destroyed) {
+                            socket.write(data);
+                        }
+                    } catch (err) {
+                        console.error('Error writing to socket:', err);
                     }
                 });
 
