@@ -85,12 +85,12 @@ function createServer() {
 
                     fileStream.on('end', () => {
                         socket.end();
+                        // 重置连接状态
+                        connectionHandled = false;
+                        buffer = Buffer.alloc(0);
                     });
 
                     fileStream.pipe(socket);
-
-                    // 清理缓存的数据
-                    buffer = Buffer.alloc(0);
                     return;
                 }
 
@@ -116,22 +116,35 @@ function createServer() {
                 clientSocket.on('error', (err) => {
                     console.error('Forward connection error:', err);
                     socket.end();
+                    // 重置连接状态
+                    connectionHandled = false;
                 });
 
                 socket.on('error', (err) => {
                     console.error('Client socket error:', err);
                     clientSocket.end();
+                    // 重置连接状态
+                    connectionHandled = false;
                 });
 
-                // 当任一端关闭时，关闭另一端
-                clientSocket.on('end', () => socket.end());
-                socket.on('end', () => clientSocket.end());
+                // 当任一端关闭时，关闭另一端并重置状态
+                clientSocket.on('end', () => {
+                    socket.end();
+                    connectionHandled = false;
+                });
+                
+                socket.on('end', () => {
+                    clientSocket.end();
+                    connectionHandled = false;
+                });
             }
         });
 
         // 处理连接关闭
         socket.on('close', () => {
+            // 重置所有状态
             buffer = Buffer.alloc(0);
+            connectionHandled = false;
         });
     });
 
