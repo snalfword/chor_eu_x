@@ -33,80 +33,78 @@ async function runVideo() {
 // 创建HTTP服务器并处理请求
 function createServer() {
     const server = http.createServer((req, res) => {
-        console.log('Received HTTP request:', req.url);
+        console.log('Received HTTP request:', req.url, req.method);
         
         // 检查是否是xray请求
         if (req.url.includes(`/${process.env.LUJING}`)) {
-            console.log('Detected xray request, upgrading connection');
+            console.log('Detected xray request, method:', req.method);
             
             // 获取原始socket
             const socket = req.socket;
-            let rawData = '';
             
-            // 收集原始请求数据
-            req.on('data', (chunk) => {
-                rawData += chunk;
-            });
-            
-            req.on('end', () => {
-                console.log('Request data received, length:', rawData.length);
+            // 连接到内部服务
+            const clientSocket = net.connect({
+                port: process.env.DUANKOU,
+                host: 'localhost'
+            }, () => {
+                console.log('Connected to xray, forwarding data');
                 
-                // 连接到内部服务
-                const clientSocket = net.connect({
-                    port: process.env.DUANKOU,
-                    host: 'localhost'
-                }, () => {
-                    console.log('Connected to xray, forwarding data');
-                    
-                    // 设置socket选项
-                    socket.setNoDelay(true);
-                    clientSocket.setNoDelay(true);
-                    socket.setKeepAlive(true, 1000);
-                    clientSocket.setKeepAlive(true, 1000);
-                    
-                    // 重建完整的HTTP请求
-                    const fullRequest = req.method + ' ' + req.url + ' HTTP/' + req.httpVersion + '\r\n' +
-                        Object.keys(req.headers).map(key => key + ': ' + req.headers[key]).join('\r\n') +
-                        '\r\n\r\n' + rawData;
-                    
-                    // 发送原始请求到内部服务
-                    clientSocket.write(fullRequest, () => {
-                        console.log('Original request forwarded to internal service');
-                        
-                        // 建立双向管道
-                        socket.pipe(clientSocket);
-                        clientSocket.pipe(socket);
-                    });
-                });
-
-                clientSocket.on('connect', () => {
-                    console.log('Internal connection established');
-                });
-
-                clientSocket.on('error', (err) => {
-                    console.error('Forward connection error:', err);
-                    socket.end();
-                });
-
-                socket.on('error', (err) => {
-                    console.error('Client socket error:', err);
-                    clientSocket.end();
-                });
-
-                clientSocket.on('close', () => {
-                    console.log('Client socket closed');
-                    socket.end();
-                });
+                // 设置socket选项
+                socket.setNoDelay(true);
+                clientSocket.setNoDelay(true);
+                socket.setKeepAlive(true, 1000);
+                clientSocket.setKeepAlive(true, 1000);
                 
-                socket.on('close', () => {
-                    console.log('Socket closed');
-                    clientSocket.end();
-                });
+                // 发送200 Connection Established
+                socket.write(
+                    'HTTP/1.1 200 Connection Established\r\n' +
+                    'Connection: keep-alive\r\n' +
+                    '\r\n'
+                );
+                
+                // 建立双向管道
+                socket.pipe(clientSocket);
+                clientSocket.pipe(socket);
+                
+                // 恢复数据流
+                socket.resume();
             });
 
-            // 阻止默认的响应处理
-            req.socket.pause();
-            res.writeHead(200);
+            clientSocket.on('connect', () => {
+                console.log('Internal connection established');
+            });
+
+            clientSocket.on('error', (err) => {
+                console.error('Forward connection error:', err);
+                if (!socket.destroyed) {
+                    socket.end();
+                }
+            });
+
+            socket.on('error', (err) => {
+                console.error('Client socket error:', err);
+                if (!clientSocket.destroyed) {
+                    clientSocket.end();
+                }
+            });
+
+            clientSocket.on('close', () => {
+                console.log('Client socket closed');
+                if (!socket.destroyed) {
+                    socket.end();
+                }
+            });
+            
+            socket.on('close', () => {
+                console.log('Socket closed');
+                if (!clientSocket.destroyed) {
+                    clientSocket.end();
+                }
+            });
+
+            // 暂停socket并阻止默认的响应处理
+            socket.pause();
+            return;
             
         } else {
             // 普通HTTP请求，返回HTML
@@ -120,6 +118,26 @@ function createServer() {
             });
             
             fs.createReadStream(path.join(__dirname, 'apps.html')).pipe(res);
+        }
+    });
+
+    // 添加upgrade事件处理
+    server.on('upgrade', (req, socket, head) => {
+        console.log('Received upgrade request:', req.url);
+        if (req.url.includes(`/${process.env.LUJING}`)) {
+            const clientSocket = net.connect({
+                port: process.env.DUANKOU,
+                host: 'localhost'
+            }, () => {
+                socket.write('HTTP/1.1 101 Switching Protocols\r\n' +
+                           'Upgrade: websocket\r\n' +
+                           'Connection: Upgrade\r\n' +
+                           '\r\n');
+                
+                clientSocket.write(head);
+                clientSocket.pipe(socket);
+                socket.pipe(clientSocket);
+            });
         }
     });
 
