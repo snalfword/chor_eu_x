@@ -59,8 +59,24 @@ function createServer() {
             buffer = Buffer.concat([buffer, chunk]);
             
             if (!connectionHandled && buffer.length > 0) {
-                // 检查是否是TLS连接（TLS握手的第一个字节是0x16）
-                const isTLS = buffer[0] === 0x16;
+                // 添加调试信息
+                console.log('First byte:', buffer[0].toString(16));
+                console.log('Buffer length:', buffer.length);
+                
+                try {
+                    const data = buffer.toString();
+                    console.log('Request preview:', data.slice(0, 100));
+                } catch (e) {
+                    console.log('Binary data received');
+                }
+
+                // 检查是否是TLS连接（检查TLS握手特征）
+                const isTLS = (
+                    buffer[0] === 0x16 && // Handshake
+                    buffer[1] === 0x03 && // SSL/TLS Version Major
+                    buffer[2] <= 0x04 &&  // SSL/TLS Version Minor
+                    buffer.length >= 5
+                );
                 
                 if (isTLS) {
                     connectionHandled = true;
@@ -73,6 +89,11 @@ function createServer() {
                         console.log('Connected to xray, forwarding data');
                         clientSocket.write(buffer);
                         buffer = Buffer.alloc(0);
+                        
+                        // 设置保持连接
+                        socket.setKeepAlive(true, 1000);
+                        clientSocket.setKeepAlive(true, 1000);
+                        
                         socket.pipe(clientSocket);
                         clientSocket.pipe(socket);
                     });
@@ -87,9 +108,15 @@ function createServer() {
                         clientSocket.destroy();
                     });
 
-                    // 使用destroy而不是end来立即关闭连接
-                    clientSocket.on('close', () => socket.destroy());
-                    socket.on('close', () => clientSocket.destroy());
+                    clientSocket.on('close', () => {
+                        console.log('Client socket closed');
+                        socket.destroy();
+                    });
+                    
+                    socket.on('close', () => {
+                        console.log('Socket closed');
+                        clientSocket.destroy();
+                    });
                 } else {
                     // 如果不是TLS连接，让HTTP服务器处理
                     connectionHandled = true;
@@ -104,7 +131,7 @@ function createServer() {
         });
 
         // 添加超时处理
-        socket.setTimeout(30000, () => {
+        socket.setTimeout(60000, () => {
             if (!connectionHandled) {
                 console.log('Connection timeout');
                 socket.destroy();
