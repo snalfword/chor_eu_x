@@ -42,12 +42,12 @@ function createServer() {
             // 获取原始socket
             const socket = req.socket;
             
-            // 连接到内部服务
+            // 连接到内部服务（vmess使用53003端口）
             const clientSocket = net.connect({
-                port: process.env.DUANKOU,
+                port: 53003,  // 使用vmess的内部端口
                 host: 'localhost'
             }, () => {
-                console.log('Connected to xray, forwarding data');
+                console.log('Connected to xray vmess service');
                 
                 // 设置socket选项
                 socket.setNoDelay(true);
@@ -59,39 +59,54 @@ function createServer() {
                 socket.setTimeout(0);
                 clientSocket.setTimeout(0);
 
-                // 发送CONNECT响应
-                socket.write(
-                    'HTTP/1.1 200 Connection Established\r\n' +
-                    'Connection: keep-alive\r\n' +
-                    'Proxy-Connection: keep-alive\r\n' +
-                    '\r\n'
-                );
+                // 重建WebSocket握手请求
+                const wsHeaders = {
+                    ...req.headers,
+                    'X-Forwarded-For': socket.remoteAddress,
+                    'X-Real-IP': socket.remoteAddress,
+                    'Proxy-Connection': 'Keep-Alive',
+                    'Connection': 'Upgrade',
+                    'Upgrade': 'websocket'
+                };
 
-                // 直接转发数据，不使用pipe
-                socket.on('data', (data) => {
-                    console.log('Client -> Server:', data.length, 'bytes');
-                    try {
-                        if (!clientSocket.destroyed) {
-                            clientSocket.write(data);
+                // 构建WebSocket请求
+                const wsRequest = [
+                    `${req.method} ${req.url} HTTP/1.1`,
+                    ...Object.entries(wsHeaders).map(([key, value]) => `${key}: ${value}`),
+                    '',
+                    ''
+                ].join('\r\n');
+
+                // 发送WebSocket握手请求到内部服务
+                clientSocket.write(wsRequest, () => {
+                    console.log('WebSocket handshake sent to internal service');
+                    
+                    // 直接转发数据
+                    socket.on('data', (data) => {
+                        console.log('Client -> Server:', data.length, 'bytes');
+                        try {
+                            if (!clientSocket.destroyed) {
+                                clientSocket.write(data);
+                            }
+                        } catch (err) {
+                            console.error('Error writing to client socket:', err);
                         }
-                    } catch (err) {
-                        console.error('Error writing to client socket:', err);
-                    }
-                });
+                    });
 
-                clientSocket.on('data', (data) => {
-                    console.log('Server -> Client:', data.length, 'bytes');
-                    try {
-                        if (!socket.destroyed) {
-                            socket.write(data);
+                    clientSocket.on('data', (data) => {
+                        console.log('Server -> Client:', data.length, 'bytes');
+                        try {
+                            if (!socket.destroyed) {
+                                socket.write(data);
+                            }
+                        } catch (err) {
+                            console.error('Error writing to socket:', err);
                         }
-                    } catch (err) {
-                        console.error('Error writing to socket:', err);
-                    }
-                });
+                    });
 
-                // 恢复数据流
-                socket.resume();
+                    // 恢复数据流
+                    socket.resume();
+                });
             });
 
             clientSocket.on('connect', () => {
