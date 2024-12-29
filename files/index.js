@@ -38,9 +38,11 @@ function createServer() {
         // 检查是否是xray请求
         if (req.url.includes(`/${process.env.LUJING}`)) {
             console.log('Detected xray request, method:', req.method);
+            console.log('Headers:', req.headers);
             
             // 获取原始socket
             const socket = req.socket;
+            let handshakeComplete = false;
             
             // 连接到内部服务（vmess使用53003端口）
             const clientSocket = net.connect({
@@ -61,12 +63,18 @@ function createServer() {
 
                 // 重建WebSocket握手请求
                 const wsHeaders = {
-                    ...req.headers,
+                    'Host': req.headers.host,
+                    'User-Agent': req.headers['user-agent'],
+                    'Accept': '*/*',
+                    'Accept-Language': req.headers['accept-language'],
+                    'Accept-Encoding': req.headers['accept-encoding'],
+                    'Sec-WebSocket-Version': '13',
+                    'Sec-WebSocket-Key': req.headers['sec-websocket-key'] || 'dGhlIHNhbXBsZSBub25jZQ==',
+                    'Connection': 'Upgrade',
+                    'Upgrade': 'websocket',
                     'X-Forwarded-For': socket.remoteAddress,
                     'X-Real-IP': socket.remoteAddress,
-                    'Proxy-Connection': 'Keep-Alive',
-                    'Connection': 'Upgrade',
-                    'Upgrade': 'websocket'
+                    'Proxy-Connection': 'Keep-Alive'
                 };
 
                 // 构建WebSocket请求
@@ -77,35 +85,53 @@ function createServer() {
                     ''
                 ].join('\r\n');
 
+                console.log('Sending WebSocket request:', wsRequest);
+
                 // 发送WebSocket握手请求到内部服务
                 clientSocket.write(wsRequest, () => {
                     console.log('WebSocket handshake sent to internal service');
-                    
-                    // 直接转发数据
-                    socket.on('data', (data) => {
-                        console.log('Client -> Server:', data.length, 'bytes');
-                        try {
-                            if (!clientSocket.destroyed) {
-                                clientSocket.write(data);
-                            }
-                        } catch (err) {
-                            console.error('Error writing to client socket:', err);
-                        }
-                    });
+                });
 
-                    clientSocket.on('data', (data) => {
-                        console.log('Server -> Client:', data.length, 'bytes');
-                        try {
-                            if (!socket.destroyed) {
-                                socket.write(data);
-                            }
-                        } catch (err) {
-                            console.error('Error writing to socket:', err);
-                        }
-                    });
+                // 处理来自内部服务的响应
+                let responseBuffer = Buffer.alloc(0);
+                clientSocket.on('data', (data) => {
+                    if (!handshakeComplete) {
+                        responseBuffer = Buffer.concat([responseBuffer, data]);
+                        const responseStr = responseBuffer.toString();
+                        
+                        if (responseStr.includes('\r\n\r\n')) {
+                            console.log('Received handshake response:', responseStr);
+                            handshakeComplete = true;
+                            
+                            // 转发握手响应给客户端
+                            socket.write(responseBuffer, () => {
+                                console.log('Handshake response forwarded to client');
+                                
+                                // 设置数据转发
+                                socket.on('data', (clientData) => {
+                                    console.log('Client -> Server:', clientData.length, 'bytes');
+                                    if (!clientSocket.destroyed) {
+                                        clientSocket.write(clientData);
+                                    }
+                                });
 
-                    // 恢复数据流
-                    socket.resume();
+                                clientSocket.on('data', (serverData) => {
+                                    console.log('Server -> Client:', serverData.length, 'bytes');
+                                    if (!socket.destroyed) {
+                                        socket.write(serverData);
+                                    }
+                                });
+
+                                // 恢复数据流
+                                socket.resume();
+                            });
+                        }
+                    } else {
+                        // 正常数据转发
+                        if (!socket.destroyed) {
+                            socket.write(data);
+                        }
+                    }
                 });
             });
 
